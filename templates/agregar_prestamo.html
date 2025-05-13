@@ -1,0 +1,70 @@
+{% block content %}
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>Biblioteca Virtual - Agregar Prestamos</title>
+  <link rel="stylesheet" href="/static/styles.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+  <script>
+    if (localStorage.getItem('modoOscuro') === 'true') {
+      document.write('<style>body{visibility:hidden}</style>');
+    }
+  </script>
+</head>
+<body onload="restaurarModoOscuro()">
+  <script>
+    function restaurarModoOscuro() {
+      const oscuro = localStorage.getItem('modoOscuro') === 'true';
+      document.body.classList.toggle('dark-mode', oscuro);
+      document.getElementById('icono-modo').textContent = oscuro ? '☀️ Modo Claro' : '🌙 Modo Oscuro';
+      document.body.style.visibility = 'visible';
+    }
+
+    function toggleDarkMode() {
+      const isDark = document.body.classList.toggle('dark-mode');
+      localStorage.setItem('modoOscuro', isDark);
+      document.getElementById('icono-modo').textContent = isDark ? '☀️ Modo Claro' : '🌙 Modo Oscuro';
+    }
+  </script>
+
+  <button class="toggle-mode" onclick="toggleDarkMode()" id="icono-modo">
+    🌙 Modo Oscuro
+  </button>
+        
+        <header>
+            <h1>📚 Biblioteca Virtual</h1>
+        </header>
+    
+        <nav>
+            <ul>
+                <li><a href="{{ url_for('index') }}">🏠 Inicio</a></li>
+                <li><a href="{{ url_for('listar_libros') }}">📖 Libros</a></li>
+                <li><a href="{{ url_for('listar_autores') }}">👤 Autores</a></li>
+                <li><a href="{{ url_for('listar_categorias')}}">🤖 Categorías</a></li>
+                <li><a href="{{ url_for('listar_prestamos')}}">📚 Prestamos</a></li> 
+            </ul>
+        </nav>
+
+<h2>➕ Agregar Nuevo Prestamo</h2>
+
+<form method="POST" class="formulario">
+
+    <label for="id_libro">Libro:</label>
+    <select name="id_libro" id="id_libro">
+        {% for libro in libros %}
+        <option value="{{ libro.id_libro }}">{{ libro.titulo }}</option>
+        {% endfor %}
+    </select>
+    
+    <Label for="id_fecha_prestamo">Fecha de Prestamo:</Label>
+    <input type="date" name="id_fecha_prestamo" id="id_fecha_prestamo">
+
+    <label for="id_fecha_devolucion">Fecha de Devolución:</label>
+    <input type="date" name="id_fecha_devolucion" id="id_fecha_devolucion">
+
+    <button type="submit" class="btn-guardar">💾 Guardar</button>
+</form>
+
+<a href="/prestamos" class="btn-volver">⬅️ Volver</a>
+{% endblock %}
