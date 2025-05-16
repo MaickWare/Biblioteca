@@ -1,3 +1,2 @@
 # Biblioteca
-Ejercicio
-Solo funciona de manera local ejecutandolo con python.
+Solo funciona de manera local ejecutandolo con python (Flask).
