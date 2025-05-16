@@ -1,319 +1,388 @@
-from flask import Flask, render_template, request, redirect, url_for
+from flask import Flask, render_template, request, redirect, url_for, send_file, session, flash, send_from_directory
 import sqlite3
+from datetime import datetime
+import pandas as pd
+from io import BytesIO
+from fpdf import FPDF
+import re
+import qrcode
 import os
+from functools import wraps
 
 app = Flask(__name__)
-DATABASE = 'biblioteca.db'
+app.secret_key = 'admin'
+
+def init_db():
+    conn = sqlite3.connect('database.db')
+    c = conn.cursor()
+
+    # Tabla de propietarios
+    c.execute('''
+    CREATE TABLE IF NOT EXISTS propietarios (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        documento TEXT UNIQUE,
+        nombres TEXT,
+        apellidos TEXT,
+        celular TEXT,
+        direccion TEXT,
+        correo TEXT
+    )''')
+
+    # Tabla de equipos
+    c.execute('''
+    CREATE TABLE IF NOT EXISTS equipos (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        propietario_id INTEGER,
+        marca TEXT,
+        serie TEXT,
+        codigo_qr TEXT UNIQUE,
+        FOREIGN KEY(propietario_id) REFERENCES propietarios(id)
+    )''')
+
+    # Tabla de movimientos
+    c.execute('''
+    CREATE TABLE IF NOT EXISTS movimientos (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        equipo_id INTEGER,
+        fecha_ingreso DATETIME,
+        fecha_salida DATETIME,
+        FOREIGN KEY(equipo_id) REFERENCES equipos(id)
+    )''')
+
+    # Tabla de usuarios con rol
+    c.execute('''
+    CREATE TABLE IF NOT EXISTS usuarios (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        username TEXT UNIQUE,
+        password TEXT,
+        rol TEXT CHECK(rol IN ('admin', 'usuario')) NOT NULL
+    )''')
+
+    # Crear admin por defecto si no existe
+    c.execute("SELECT * FROM usuarios WHERE username = 'admin'")
+    if not c.fetchone():
+        c.execute("INSERT INTO usuarios (username, password, rol) VALUES (?, ?, ?)", ('admin', '1234', 'admin'))
+
+    conn.commit()
+    conn.close()
+
+init_db()
 
 def get_db_connection():
-    conn = sqlite3.connect(DATABASE)
+    conn = sqlite3.connect('database.db')
     conn.row_factory = sqlite3.Row
     return conn
 
-def init_db():
-    if not os.path.exists(DATABASE):
-        conn = sqlite3.connect(DATABASE)
-        cursor = conn.cursor()
-        cursor.executescript('''
-    CREATE TABLE IF NOT EXISTS autores (
-        id_autor INTEGER PRIMARY KEY AUTOINCREMENT,
-        nombre TEXT NOT NULL,
-        anio TEXT NOT NULL
-    );
-
-    CREATE TABLE IF NOT EXISTS categorias (
-        id_categoria INTEGER PRIMARY KEY AUTOINCREMENT,
-        nombre TEXT NOT NULL
-    );
-
-    CREATE TABLE IF NOT EXISTS libros (
-        id_libro INTEGER PRIMARY KEY AUTOINCREMENT,
-        titulo TEXT NOT NULL,
-        id_autor INTEGER NOT NULL,
-        id_categoria INTEGER NOT NULL,
-        anio_publicacion INTEGER NOT NULL,
-        FOREIGN KEY (id_autor) REFERENCES autores (id_autor),
-        FOREIGN KEY (id_categoria) REFERENCES categorias (id_categoria)
-    );
-
-    CREATE TABLE IF NOT EXISTS prestamos (
-        id_prestamos INTEGER PRIMARY KEY AUTOINCREMENT,
-        fecha_prestamo TEXT NOT NULL,
-        fecha_devolucion TEXT,
-        id_libro INTEGER NOT NULL,
-        FOREIGN KEY (id_libro) REFERENCES libros (id_libro)
-    );
-                             
-    -- NUEVAS TABLAS PARA REUTILIZACIÓN DE IDs
-    CREATE TABLE IF NOT EXISTS ids_libres_autores (
-        id INTEGER PRIMARY KEY
-    );
-                             
-    CREATE TABLE IF NOT EXISTS ids_libres_categorias (
-        id INTEGER PRIMARY KEY
-    );
-
-    CREATE TABLE IF NOT EXISTS ids_libres_libros (
-        id INTEGER PRIMARY KEY
-    );
-                             
-    CREATE TABLE IF NOT EXISTS ids_libres_prestamos (
-        id INTEGER PRIMARY KEY
-    );
-''')
-        
-        cursor.execute("INSERT INTO autores (id_autor, nombre, anio) VALUES (?, ?, ?)", (1, 'Gabriel García Márquez', '1927'))
-        cursor.execute("INSERT INTO categorias (nombre) VALUES (?)", ('Realismo Mágico',))
-        id_categoria = cursor.lastrowid
-        cursor.execute("INSERT INTO libros (id_libro, titulo, id_autor, id_categoria, anio_publicacion) VALUES (?, ?, ?, ?, ?)",
-                       (1, 'Cien años de soledad', 1, id_categoria, 1967))
-        conn.commit()
-        conn.close()
-        print("Base de datos creada con datos de prueba.")
+@app.context_processor
+def inject_session():
+    return dict(session=session)
 
 @app.route('/')
 def index():
     return render_template('index.html')
 
-@app.route('/libros')
-def listar_libros():
-    conn = get_db_connection()
-    libros = conn.execute('''
-        SELECT l.*, a.nombre AS autor, c.nombre AS categoria
-        FROM libros l
-        JOIN autores a ON l.id_autor = a.id_autor
-        JOIN categorias c ON l.id_categoria = c.id_categoria
-    ''').fetchall()
-    conn.close()
-    return render_template('libros.html', libros=libros)
-
-@app.route('/agregar_libro', methods=['GET', 'POST'])
-def agregar_libro():
-    conn = get_db_connection()
-    cursor = conn.cursor()
+@app.route('/login', methods=['GET', 'POST'])
+def login():
     if request.method == 'POST':
-        titulo = request.form['titulo']
-        id_autor = request.form.get('id_autor')
-        id_categoria = request.form.get('id_categoria')
-        anio_publicacion = request.form['anio_publicacion']
+        usuario = request.form['username']
+        contraseña = request.form['password']
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM usuarios WHERE username = ? AND password = ?", (usuario, contraseña))
+        user = cursor.fetchone()
+        conn.close()
+        if user:
+            session['usuario'] = user['username']
+            session['rol'] = user['rol']
+            return redirect(url_for('index'))
+        else:
+            flash('Credenciales inválidas', 'danger')
+            return redirect(url_for('login'))
+    return render_template('login.html')
 
-        nuevo_autor = request.form.get('nuevo_autor')
-        anio_autor = request.form.get('anio_autor')
-        if nuevo_autor and anio_autor:
-            id_autor_libre = cursor.execute('SELECT id FROM ids_libres_autores ORDER BY id LIMIT 1').fetchone()
-            if id_autor_libre:
-                id_autor = id_autor_libre['id']
-                cursor.execute('DELETE FROM ids_libres_autores WHERE id = ?', (id_autor,))
-                cursor.execute('INSERT INTO autores (id_autor, nombre, anio) VALUES (?, ?, ?)', (id_autor, nuevo_autor, anio_autor))
+@app.route('/logout')
+def logout():
+    session.clear()
+    return redirect(url_for('login'))
+
+def admin_required(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if 'rol' not in session or session['rol'] != 'admin':
+            flash('Acceso restringido a administradores', 'warning')
+            return redirect(url_for('login'))
+        return f(*args, **kwargs)
+    return decorated_function
+
+@app.route('/registro', methods=['GET', 'POST'])
+@admin_required
+def registro():
+    if request.method == 'POST':
+        data = request.form
+
+        # Validaciones backend
+        if not re.match(r"^\d+$", data['documento']):
+            return "Documento inválido. Solo números.", 400
+        if not re.match(r"^[A-Za-zÁÉÍÓÚáéíóúñÑ\s]+$", data['nombres']):
+            return "Nombres inválidos. Solo letras.", 400
+        if not re.match(r"^[A-Za-zÁÉÍÓÚáéíóúñÑ\s]+$", data['apellidos']):
+            return "Apellidos inválidos. Solo letras.", 400
+        if not re.match(r"^\d{10}$", data['celular']):
+            return "Celular inválido. Debe tener 10 dígitos.", 400
+        if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", data['correo']):
+            return "Correo inválido.", 400
+
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT INTO propietarios (documento, nombres, apellidos, celular, direccion, correo)
+                VALUES (?, ?, ?, ?, ?, ?)''',
+                (data['documento'], data['nombres'], data['apellidos'], data['celular'], data['direccion'], data['correo'])
+            )
+            propietario_id = cursor.lastrowid
+
+            # Generar código QR
+            codigo_qr = f"{data['marca']}_{data['serie']}"
+            cursor.execute('''
+                INSERT INTO equipos (propietario_id, marca, serie, codigo_qr)
+                VALUES (?, ?, ?, ?)''',
+                (propietario_id, data['marca'], data['serie'], codigo_qr)
+            )
+
+            # Crear QR y guardarlo
+            if not os.path.exists('static/qrcodes'):
+                os.makedirs('static/qrcodes')
+            img = qrcode.make(codigo_qr)
+            img.save(f'static/qrcodes/qr_{codigo_qr}.png')
+
+            conn.commit()
+            conn.close()
+            return redirect(url_for('index'))
+
+        except sqlite3.IntegrityError:
+            return "El documento ya está registrado.", 400
+
+    return render_template('registro.html')
+
+@app.route('/generar_qr/<codigo>')
+def generar_qr(codigo):
+    # Crear directorio si no existe
+    if not os.path.exists('static/qrcodes'):
+        os.makedirs('static/qrcodes')
+    
+    # Generar QR
+    img = qrcode.make(codigo)
+    filename = f"qr_{codigo}.png"
+    img.save(f'static/qrcodes/{filename}')
+    
+    return send_from_directory('static/qrcodes', filename)
+
+@app.route('/movimiento', methods=['GET', 'POST'])
+def movimiento():
+    if request.method == 'POST':
+        codigo_qr = request.form['codigo_qr']
+        conn = get_db_connection()
+        
+        try:
+            # Buscar el equipo por código QR
+            equipo = conn.execute(
+                'SELECT id FROM equipos WHERE codigo_qr = ?', 
+                (codigo_qr,)
+            ).fetchone()
+            
+            if not equipo:
+                flash('Equipo no encontrado', 'danger')
+                return redirect(url_for('movimiento'))
+            
+            # Verificar si hay movimiento activo (sin fecha de salida)
+            movimiento_activo = conn.execute(
+                'SELECT id FROM movimientos WHERE equipo_id = ? AND fecha_salida IS NULL',
+                (equipo['id'],)
+            ).fetchone()
+            
+            now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            
+            if movimiento_activo:
+                # Registrar salida
+                conn.execute(
+                    'UPDATE movimientos SET fecha_salida = ? WHERE id = ?',
+                    (now, movimiento_activo['id'])
+                )
+                flash('Salida registrada correctamente', 'success')
             else:
-                cursor.execute('INSERT INTO autores (nombre, anio) VALUES (?, ?)', (nuevo_autor, anio_autor))
-                id_autor = cursor.lastrowid
+                # Registrar ingreso
+                conn.execute(
+                    'INSERT INTO movimientos (equipo_id, fecha_ingreso) VALUES (?, ?)',
+                    (equipo['id'], now)
+                )
+                flash('Ingreso registrado correctamente', 'success')
+            
+            conn.commit()
+            
+        except Exception as e:
+            conn.rollback()
+            flash(f'Error al registrar movimiento: {str(e)}', 'danger')
+        
+        finally:
+            conn.close()
+        
+        return redirect(url_for('movimiento'))
+    
+    return render_template('movimiento.html')
 
-        nueva_categoria = request.form.get('nueva_categoria')
-        if nueva_categoria:
-            cursor.execute('INSERT INTO categorias (nombre) VALUES (?)', (nueva_categoria,))
-            id_categoria = cursor.lastrowid
-
-        id_libro_reutilizable = cursor.execute('SELECT id FROM ids_libres_libros ORDER BY id LIMIT 1').fetchone()
-        if id_libro_reutilizable:
-            id_libro = id_libro_reutilizable['id']
-            cursor.execute('DELETE FROM ids_libres_libros WHERE id = ?', (id_libro,))
-        else:
-            id_libro = None
-
-        cursor.execute('''
-            INSERT INTO libros (id_libro, titulo, id_autor, id_categoria, anio_publicacion)
-            VALUES (?, ?, ?, ?, ?)
-        ''', (id_libro, titulo, id_autor, id_categoria, anio_publicacion))
-        conn.commit()
-        conn.close()
-        return redirect(url_for('listar_libros'))
-
-    autores = conn.execute('SELECT * FROM autores').fetchall()
-    categorias = conn.execute('SELECT * FROM categorias').fetchall()
-    conn.close()
-    return render_template('agregar_libro.html', autores=autores, categorias=categorias)
-
-@app.route('/eliminar_libro/<int:id>')
-def eliminar_libro(id):
+@app.route('/debug/movimientos')
+def debug_movimientos():
+    if 'rol' not in session or session['rol'] != 'admin':
+        return redirect(url_for('login'))
+    
     conn = get_db_connection()
-    conn.execute('DELETE FROM libros WHERE id_libro = ?', (id,))
-    conn.execute('INSERT INTO ids_libres_libros (id) VALUES (?)', (id,))
-    conn.commit()
+    
+    # Obtener todos los movimientos con detalles
+    movimientos = conn.execute('''
+        SELECT 
+            m.id as movimiento_id,
+            m.fecha_ingreso,
+            m.fecha_salida,
+            e.id as equipo_id,
+            e.marca,
+            e.serie,
+            e.codigo_qr,
+            p.id as propietario_id,
+            p.nombres,
+            p.apellidos
+        FROM movimientos m
+        LEFT JOIN equipos e ON m.equipo_id = e.id
+        LEFT JOIN propietarios p ON e.propietario_id = p.id
+        ORDER BY m.fecha_ingreso DESC
+    ''').fetchall()
+    
     conn.close()
-    return redirect(url_for('listar_libros'))
+    
+    # Convertir a lista de diccionarios para mejor visualización
+    movimientos = [dict(mov) for mov in movimientos]
+    
+    return render_template('debug_movimientos.html', movimientos=movimientos)
 
-@app.route('/editar_libro/<int:id>', methods=['GET', 'POST'])
-def editar_libro(id):
+@app.route('/panel')
+@admin_required
+def panel():
     conn = get_db_connection()
-    if request.method == 'POST':
-        titulo = request.form['titulo']
-        id_autor = request.form['id_autor']
-        id_categoria = request.form['id_categoria']
-        anio_publicacion = request.form['anio_publicacion']
-
-        conn.execute('''
-            UPDATE libros SET titulo = ?, id_autor = ?, id_categoria = ?, anio_publicacion = ?
-            WHERE id_libro = ?
-        ''', (titulo, id_autor, id_categoria, anio_publicacion, id))
-        conn.commit()
-        conn.close()
-        return redirect(url_for('listar_libros'))
-
-    libro = conn.execute('SELECT * FROM libros WHERE id_libro = ?', (id,)).fetchone()
-    autores = conn.execute('SELECT * FROM autores').fetchall()
-    categorias = conn.execute('SELECT * FROM categorias').fetchall()
+    
+    # Consulta mejorada con joins correctos
+    movimientos = conn.execute('''
+        SELECT 
+            p.nombres AS nombre,
+            e.marca,
+            e.serie,
+            datetime(m.fecha_ingreso) as fecha_ingreso,
+            datetime(m.fecha_salida) as fecha_salida
+        FROM movimientos m
+        JOIN equipos e ON m.equipo_id = e.id
+        JOIN propietarios p ON e.propietario_id = p.id
+        ORDER BY m.fecha_ingreso DESC
+    ''').fetchall()
+    
     conn.close()
-    return render_template('editar_libro.html', libro=libro, autores=autores, categorias=categorias)
+    
+    # Debug: Imprimir los resultados en consola para verificar
+    print("Movimientos encontrados:", len(movimientos))
+    for mov in movimientos:
+        print(dict(mov))
+    
+    return render_template('panel.html', movimientos=movimientos)
 
-@app.route('/autores', methods=['GET', 'POST'])
-def listar_autores():
+@app.route('/export/excel')
+@admin_required
+def export_excel():
     conn = get_db_connection()
-    cursor = conn.cursor()
-    if request.method == 'POST':
-        nuevo_autor = request.form['nuevo_autor']
-        anio_autor = request.form['anio_autor']
-
-        id_libre = cursor.execute('SELECT id FROM ids_libres_autores ORDER BY id LIMIT 1').fetchone()
-        if id_libre:
-            autor_id = id_libre['id']
-            cursor.execute('DELETE FROM ids_libres_autores WHERE id = ?', (autor_id,))
-            cursor.execute('INSERT INTO autores (id_autor, nombre, anio) VALUES (?, ?, ?)',
-                           (autor_id, nuevo_autor, anio_autor))
-        else:
-            cursor.execute('INSERT INTO autores (nombre, anio) VALUES (?, ?)',
-                           (nuevo_autor, anio_autor))
-
-        conn.commit()
-        conn.close()
-        return redirect(url_for('listar_autores'))
-
-    autores = conn.execute('SELECT * FROM autores').fetchall()
-    conn.close()
-    return render_template('autores.html', autores=autores)
-
-@app.route('/eliminar_autor/<int:id>')
-def eliminar_autor(id):
-    conn = get_db_connection()
-    conn.execute('DELETE FROM autores WHERE id_autor = ?', (id,))
-    conn.execute('INSERT INTO ids_libres_autores (id) VALUES (?)', (id,))
-    conn.commit()
-    conn.close()
-    return redirect(url_for('listar_autores'))
-
-@app.route('/editar_autor/<int:id>', methods=['GET', 'POST'])
-def editar_autor(id):
-    conn = get_db_connection()
-    autor = conn.execute('SELECT * FROM autores WHERE id_autor = ?', (id,)).fetchone()
-    if request.method == 'POST':
-        nuevo_nombre = request.form['nuevo_nombre']
-        nuevo_anio = request.form['nuevo_anio']
-        conn.execute('UPDATE autores SET nombre = ?, anio = ? WHERE id_autor = ?', (nuevo_nombre, nuevo_anio, id))
-        conn.commit()
-        conn.close()
-        return redirect(url_for('listar_autores'))
-    conn.close()
-    return render_template('editar_autor.html', autor=autor)
-
-@app.route('/categorias', methods=['GET', 'POST'])
-def listar_categorias():
-    conn = get_db_connection()
-    if request.method == 'POST':
-        nueva_categoria = request.form['nueva_categoria']
-        conn.execute('INSERT INTO categorias (nombre) VALUES (?)', (nueva_categoria,))
-        conn.commit()
-        conn.close()
-        return redirect(url_for('listar_categorias'))
-
-    categorias = conn.execute('SELECT * FROM categorias').fetchall()
-    conn.close()
-    return render_template('categorias.html', categorias=categorias)
-
-@app.route('/eliminar_categoria/<int:id>')
-def eliminar_categoria(id):
-    conn = get_db_connection()
-    conn.execute('DELETE FROM categorias WHERE id_categoria = ?', (id,))
-    conn.commit()
-    conn.close()
-    return redirect(url_for('listar_categorias'))
-
-@app.route('/editar_categoria/<int:id>', methods=['GET', 'POST'])
-def editar_categoria(id):
-    conn = get_db_connection()
-    categoria = conn.execute('SELECT * FROM categorias WHERE id_categoria = ?', (id,)).fetchone()
-    if request.method == 'POST':
-        nuevo_nombre = request.form['nuevo_nombre']
-        conn.execute('UPDATE categorias SET nombre = ? WHERE id_categoria = ?', (nuevo_nombre, id))
-        conn.commit()
-        conn.close()
-        return redirect(url_for('listar_categorias'))
-    conn.close()
-    return render_template('editar_categoria.html', categoria=categoria)
-
-@app.route('/prestamos')
-def listar_prestamos():
-    conn = get_db_connection()
-    prestamos = conn.execute('''
-        SELECT p.id_prestamos, l.titulo AS libro, p.fecha_prestamo, p.fecha_devolucion
-        FROM prestamos p
-        JOIN libros l ON p.id_libro = l.id_libro
+    movimientos = conn.execute('''
+        SELECT p.nombres || ' ' || p.apellidos AS nombre,
+               e.marca, e.serie, 
+               m.fecha_ingreso, m.fecha_salida
+        FROM movimientos m
+        JOIN equipos e ON m.equipo_id = e.id
+        JOIN propietarios p ON e.propietario_id = p.id
+        ORDER BY m.fecha_ingreso DESC
     ''').fetchall()
     conn.close()
-    return render_template('prestamos.html', prestamos=prestamos)
 
-@app.route('/agregar_prestamo', methods=['GET', 'POST'])
-def agregar_prestamo():
+    # Convertir a DataFrame
+    df = pd.DataFrame(movimientos, columns=['Nombre', 'Marca', 'Serie', 'Fecha Ingreso', 'Fecha Salida'])
+    
+    # Formatear fechas
+    df['Fecha Ingreso'] = pd.to_datetime(df['Fecha Ingreso']).dt.strftime('%Y-%m-%d %H:%M:%S')
+    df['Fecha Salida'] = pd.to_datetime(df['Fecha Salida']).dt.strftime('%Y-%m-%d %H:%M:%S')
+    
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        df.to_excel(writer, index=False, sheet_name='Movimientos')
+    output.seek(0)
+    
+    return send_file(
+        output,
+        as_attachment=True,
+        download_name='movimientos.xlsx',
+        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    )
+
+@app.route('/export/pdf')
+def export_pdf():
+    if 'rol' not in session or session['rol'] != 'admin':
+        return redirect(url_for('login'))
+
     conn = get_db_connection()
-    if request.method == 'POST':
-        id_libro = request.form['id_libro']
-        fecha_prestamo = request.form['id_fecha_prestamo']
-        fecha_devolucion = request.form['id_fecha_devolucion']
-
-        conn.execute('''
-            INSERT INTO prestamos (id_libro, fecha_prestamo, fecha_devolucion)
-            VALUES (?, ?, ?)
-        ''', (id_libro, fecha_prestamo, fecha_devolucion))
-        conn.commit()
-        conn.close()
-        return redirect(url_for('listar_prestamos'))
-
-    libros = conn.execute('SELECT id_libro, titulo FROM libros').fetchall()
+    movimientos = conn.execute('''
+        SELECT p.nombres || ' ' || p.apellidos AS nombre_completo,
+               e.marca, e.serie, m.fecha_ingreso, m.fecha_salida
+        FROM movimientos m
+        JOIN equipos e ON m.equipo_id = e.id
+        JOIN propietarios p ON e.propietario_id = p.id
+        ORDER BY m.fecha_ingreso DESC
+    ''').fetchall()
     conn.close()
-    return render_template('agregar_prestamo.html', libros=libros)
 
+    pdf = FPDF()
+    pdf.set_auto_page_break(auto=True, margin=15)
+    pdf.add_page()
+    pdf.set_font("Arial", size=12)
+    pdf.set_font("Arial", style="B", size=16)
+    pdf.cell(200, 10, txt="Reporte de Movimientos", ln=True, align="C")
+    pdf.ln(10)
+    pdf.set_font("Arial", style="B", size=12)
+    pdf.cell(50, 10, txt="Nombre Completo", border=1, align="C")
+    pdf.cell(30, 10, txt="Marca", border=1, align="C")
+    pdf.cell(40, 10, txt="Serie", border=1, align="C")
+    pdf.cell(35, 10, txt="Fecha Ingreso", border=1, align="C")
+    pdf.cell(35, 10, txt="Fecha Salida", border=1, align="C")
+    pdf.ln()
+    pdf.set_font("Arial", size=10)
+    for mov in movimientos:
+        pdf.cell(50, 10, txt=str(mov['nombre_completo']), border=1)
+        pdf.cell(30, 10, txt=str(mov['marca']), border=1)
+        pdf.cell(40, 10, txt=str(mov['serie']), border=1)
+        pdf.cell(35, 10, txt=str(mov['fecha_ingreso']), border=1)
+        pdf.cell(35, 10, txt=str(mov['fecha_salida']), border=1)
+        pdf.ln()
+    output = BytesIO()
+    pdf.output(output)
+    output.seek(0)
+    return send_file(output, as_attachment=True, download_name='movimientos.pdf', mimetype='application/pdf')
 
-@app.route('/editar_prestamo/<int:id>', methods=['GET', 'POST'])
-def editar_prestamo(id):
+@app.route('/eliminar_movimiento/<int:movimiento_id>', methods=['POST'])
+def eliminar_movimiento(movimiento_id):
+    if 'rol' not in session or session['rol'] != 'admin':
+        return redirect(url_for('login'))
+
     conn = get_db_connection()
-    prestamos = conn.execute('SELECT * FROM prestamos WHERE id_prestamos = ?', (id,)).fetchone()
-
-    if request.method == 'POST':
-        id_libro = request.form['id_libro']
-        fecha_prestamo = request.form['id_fecha_prestamo']
-        fecha_devolucion = request.form['id_fecha_devolucion']
-
-        conn.execute('''
-            UPDATE prestamos
-            SET id_libro = ?, fecha_prestamo = ?, fecha_devolucion = ?
-            WHERE id_prestamos = ?
-        ''', (id_libro, fecha_prestamo, fecha_devolucion, id))
-        conn.commit()
-        conn.close()
-        return redirect(url_for('listar_prestamos'))
-
-    libros = conn.execute('SELECT id_libro, titulo FROM libros').fetchall()
-    conn.close()
-    return render_template('editar_prestamo.html', prestamos=prestamos, libros=libros)
-
-@app.route('/eliminar_prestamo/<int:id>')
-def eliminar_prestamo(id):
-    conn = get_db_connection()
-    conn.execute('DELETE FROM prestamos WHERE id_prestamos = ?', (id,))
-    conn.execute('INSERT INTO ids_libres_prestamos (id) VALUES (?)', (id,))
+    conn.execute('DELETE FROM movimientos WHERE id = ?', (movimiento_id,))
     conn.commit()
     conn.close()
-    return redirect(url_for('listar_prestamos'))
+    return redirect(url_for('movimiento'))
 
 if __name__ == '__main__':
-    init_db()
+    if not os.path.exists('static/qrcodes'):
+        os.makedirs('static/qrcodes')
+    if not os.path.exists('control.db'):
+        init_db()
     app.run(debug=True)

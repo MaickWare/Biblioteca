@@ -1,65 +1,53 @@
-<!DOCTYPE html>
-<html lang="es">
-<head>
-  <meta charset="UTF-8">
-  <title>Biblioteca Virtual - Categorias</title>
-  <link rel="stylesheet" href="/static/styles.css">
-  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
-  <script>
-    if (localStorage.getItem('modoOscuro') === 'true') {
-      document.write('<style>body{visibility:hidden}</style>');
-    }
-  </script>
-</head>
-<body onload="restaurarModoOscuro()">
-  <script>
-    function restaurarModoOscuro() {
-      const oscuro = localStorage.getItem('modoOscuro') === 'true';
-      document.body.classList.toggle('dark-mode', oscuro);
-      document.getElementById('icono-modo').textContent = oscuro ? '☀️ Modo Claro' : '🌙 Modo Oscuro';
-      document.body.style.visibility = 'visible';
-    }
+{% extends 'base.html' %}
+{% block title %}Inicio | CDATH{% endblock %}
+{% block content %}
+    <main class="container my-4">
+        <!-- Sección de bienvenida -->
+        <section class="text-center mb-5">
+            <h2 class="text-success">¡Bienvenido al Sistema de Control de Portátiles!</h2>
+            <p class="text-muted">Gestiona de manera eficiente el ingreso y salida de portátiles en el Centro de Formación CDATH.</p>
+            <img src="/static/images/gestion_portatiles.jpg" alt="Gestión de Portátiles" class="img-fluid rounded shadow" style="max-width: 80%;">
+        </section>
 
-    function toggleDarkMode() {
-      const isDark = document.body.classList.toggle('dark-mode');
-      localStorage.setItem('modoOscuro', isDark);
-      document.getElementById('icono-modo').textContent = isDark ? '☀️ Modo Claro' : '🌙 Modo Oscuro';
-    }
-  </script>
+        <!-- Sección de funcionalidades -->
+        <section class="row text-center">
+            <div class="col-md-4 mb-4">
+                <div class="card shadow-sm">
+                    <img src="/static/images/registro.jpg" class="card-img-top" alt="Registrar Propietario">
+                    <div class="card-body">
+                        <h5 class="card-title text-success">Registrar Propietario</h5>
+                        <p class="card-text">Añade nuevos propietarios al sistema con toda su información personal.</p>
+                        <a href="/registro" class="btn btn-success">Registrar</a>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-4 mb-4">
+                <div class="card shadow-sm">
+                    <img src="/static/images/movimiento.jpg" class="card-img-top" alt="Registro de Movimientos">
+                    <div class="card-body">
+                        <h5 class="card-title text-success">Registro de Movimientos</h5>
+                        <p class="card-text">Controla el ingreso y salida de portátiles de manera sencilla.</p>
+                        <a href="/movimiento" class="btn btn-success">Registrar Movimiento</a>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-4 mb-4">
+                <div class="card shadow-sm">
+                    <img src="/static/images/panel_control.jpg" class="card-img-top" alt="Panel de Control">
+                    <div class="card-body">
+                        <h5 class="card-title text-success">Panel de Control</h5>
+                        <p class="card-text">Consulta y exporta los movimientos registrados en el sistema.</p>
+                        <a href="/panel" class="btn btn-success">Ir al Panel</a>
+                    </div>
+                </div>
+            </div>
+        </section>
 
-  <button class="toggle-mode" onclick="toggleDarkMode()" id="icono-modo">
-    🌙 Modo Oscuro
-  </button>
-
-  <header>
-    <h1>📚 Biblioteca Virtual</h1>
-  </header>
-
-  <nav>
-    <ul>
-      <li><a href="{{ url_for('index') }}">🏠 Inicio</a></li>
-      <li><a href="{{ url_for('listar_libros') }}">📖 Libros</a></li>
-      <li><a href="{{ url_for('listar_autores') }}">👤 Autores</a></li>
-      <li><a href="{{ url_for('listar_categorias')}}">🤖 Categorías</a></li>
-      <li><a href="{{ url_for('listar_prestamos')}}">📚 Prestamos</a></li>
-    </ul>
-  </nav>
-
-  <h2>BIENVENIDO AL MUNDO DE LA LITERATURA</h2>
-
-  <main>
-    <p>La Biblioteca Virtual es un espacio donde puedes encontrar una amplia variedad de libros, autores y categorías. Aquí podrás explorar, descubrir y disfrutar de la lectura en un entorno digital.</p>
-    <p>Desde novelas clásicas hasta los últimos bestsellers, nuestra colección está diseñada para satisfacer todos los gustos literarios. Además, ofrecemos recursos adicionales como reseñas, recomendaciones y mucho más.</p>
-    <p>¡Sumérgete en el mundo de la literatura y descubre tu próxima gran lectura!</p>
-    <img src="/static/images/biblioteca.png" alt="Biblioteca Virtual" style="display: block; margin: 0 auto;">
-    <p>La lectura es una de las actividades más enriquecedoras que puedes realizar...</p>
-    <p>Explora nuestra colección y encuentra tu próximo libro favorito.</p>
-    <p>¡Feliz lectura!</p>
-    {% block content %}{% endblock %}
-  </main>
-
-  <footer>
-    &copy; 2025 Biblioteca Virtual
-  </footer>
-</body>
-</html>
+        <!-- Sección de contacto -->
+        <section class="bg-success text-white text-center py-4 rounded shadow mt-5">
+            <h4>¿Necesitas ayuda?</h4>
+            <p>Contacta con el equipo de soporte del Centro de Formación CDATH.</p>
+            <a href="mailto:soporte@cdath.edu.co" class="btn btn-outline-light">Enviar Correo</a>
+        </section>
+    </main>
+{% endblock %}
